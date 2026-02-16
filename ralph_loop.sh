@@ -9,6 +9,9 @@ set -e  # Exit on any error
 # environment variables are NOT exported here. Tool restrictions are handled
 # via --allowedTools flag in CLAUDE_CMD_ARGS, which is the proper approach.
 # Exporting sandbox variables without a verified sandbox would be misleading.
+#
+# Opt-in: Set DANGEROUSLY_SKIP_PERMISSIONS=true in .ralphrc to pass
+# --dangerously-skip-permissions to Claude Code, bypassing all tool prompts.
 
 # Source library components
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -53,6 +56,7 @@ CLAUDE_TIMEOUT_MINUTES="${CLAUDE_TIMEOUT_MINUTES:-15}"
 # Modern Claude CLI configuration (Phase 1.1)
 CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-json}"
 CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)}"
+CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS="${CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS:-false}"
 CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-true}"
 CLAUDE_SESSION_FILE="$RALPH_DIR/.claude_session_id" # Session ID persistence file
 CLAUDE_MIN_VERSION="2.0.76"              # Minimum required Claude CLI version
@@ -127,6 +131,9 @@ load_ralphrc() {
     # Map .ralphrc variable names to internal names
     if [[ -n "${ALLOWED_TOOLS:-}" ]]; then
         CLAUDE_ALLOWED_TOOLS="$ALLOWED_TOOLS"
+    fi
+    if [[ -n "${DANGEROUSLY_SKIP_PERMISSIONS:-}" ]]; then
+        CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS="$DANGEROUSLY_SKIP_PERMISSIONS"
     fi
     if [[ -n "${SESSION_CONTINUITY:-}" ]]; then
         CLAUDE_USE_CONTINUE="$SESSION_CONTINUITY"
@@ -958,9 +965,6 @@ build_claude_command() {
     local session_id=$3
 
     # Reset global array
-    # Note: We do NOT use --dangerously-skip-permissions here. Tool permissions
-    # are controlled via --allowedTools from CLAUDE_ALLOWED_TOOLS in .ralphrc.
-    # This preserves the permission denial circuit breaker (Issue #101).
     CLAUDE_CMD_ARGS=("$CLAUDE_CODE_CMD")
 
     # Check if prompt file exists
@@ -969,13 +973,21 @@ build_claude_command() {
         return 1
     fi
 
+    # Add --dangerously-skip-permissions if opted in via .ralphrc
+    # When enabled, this bypasses Claude's tool permission system entirely.
+    # ALLOWED_TOOLS and --allowedTools are ignored when this flag is active.
+    if [[ "${CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS:-false}" == "true" ]]; then
+        CLAUDE_CMD_ARGS+=("--dangerously-skip-permissions")
+    fi
+
     # Add output format flag
     if [[ "$CLAUDE_OUTPUT_FORMAT" == "json" ]]; then
         CLAUDE_CMD_ARGS+=("--output-format" "json")
     fi
 
     # Add allowed tools (each tool as separate array element)
-    if [[ -n "$CLAUDE_ALLOWED_TOOLS" ]]; then
+    # Skipped when --dangerously-skip-permissions is active
+    if [[ -n "$CLAUDE_ALLOWED_TOOLS" && "${CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS:-false}" != "true" ]]; then
         CLAUDE_CMD_ARGS+=("--allowedTools")
         # Split by comma and add each tool
         local IFS=','
